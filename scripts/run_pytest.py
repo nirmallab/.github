@@ -124,7 +124,8 @@ def buildCommand(args, extra: list[str]) -> tuple[list[str], list[str]]:
                 notes.append("pytest-timeout < 2.3 has no --session-timeout")
     else:
         notes.append("pytest-timeout is not installed: no per-test timeout")
-    if args.seed and has("pytest_randomly"):
+    disabled = any(a in ("no:randomly", "-pno:randomly") for a in extra)
+    if args.seed and has("pytest_randomly") and not disabled:
         # Every shard of a run must shuffle the same way, or reports differ.
         cmd.append(f"--randomly-seed={args.seed}")
     return cmd + extra, notes

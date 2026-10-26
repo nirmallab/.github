@@ -98,6 +98,15 @@ def test_a_hang_is_killed_and_still_reported(project):
     assert status["seconds"] < 60
 
 
+def test_a_disabled_randomly_gets_no_seed():
+    import argparse
+    import run_pytest
+    args = argparse.Namespace(out="o", shard="", durations="", workers="0", test_timeout=0,
+                              session_timeout=0, seed="123")
+    cmd, _ = run_pytest.buildCommand(args, ["-p", "no:randomly"])
+    assert not any(a.startswith("--randomly-seed") for a in cmd)
+
+
 def test_the_test_process_gets_an_isolated_home(project, monkeypatch):
     monkeypatch.setenv("BIOCOGNIA_DIR", "/the/real/one")
     (project / "tests" / "test_env.py").write_text(textwrap.dedent("""
