@@ -1,0 +1,48 @@
+name: Select tests
+description: >-
+  Which tests a push or pull request needs, from what it changed and the
+  repository's ci/selection.toml. Needs a checkout with history
+  (fetch-depth: 0) and the runner's python3 (3.11+).
+
+inputs:
+  config:
+    description: The selection config.
+    default: ci/selection.toml
+  scope:
+    description: auto (from the diff), essential, core or full.
+    default: auto
+  base:
+    description: Commit to compare with. Defaults to the push's previous tip or the pull request's base.
+    default: ""
+
+outputs:
+  scope:
+    description: none, essential, core or full.
+    value: ${{ steps.select.outputs.scope }}
+  tests:
+    description: Test files, space-separated (empty for none and full).
+    value: ${{ steps.select.outputs.tests }}
+  deferred:
+    description: Mapped test files left to the weekly run by the time budget.
+    value: ${{ steps.select.outputs.deferred }}
+  flags:
+    description: Names from the config's [flags] whose paths changed, space-separated.
+    value: ${{ steps.select.outputs.flags }}
+  reason:
+    description: One line on why this scope.
+    value: ${{ steps.select.outputs.reason }}
+  changed:
+    description: Changed files that still exist, space-separated.
+    value: ${{ steps.select.outputs.changed }}
+
+runs:
+  using: composite
+  steps:
+    - id: select
+      shell: bash
+      env:
+        CONFIG: ${{ inputs.config }}
+        SCOPE: ${{ inputs.scope }}
+        BASE: ${{ inputs.base || github.event.pull_request.base.sha || github.event.before }}
+        SCRIPTS: ${{ github.action_path }}/../../scripts
+      run: python3 "$SCRIPTS/select_tests.py" --config "$CONFIG" --base "$BASE" --scope "$SCOPE" > /dev/null

@@ -1,0 +1,91 @@
+name: selftest
+
+# The shared CI pieces, tested where they will run: the scripts' unit tests on
+# all three operating systems, the composite actions end to end against a tiny
+# fixture project (two shards plus a report that must account for every test),
+# and actionlint over every workflow and action here. This repository is
+# public, so none of it costs Actions minutes.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: selftest-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  scripts:
+    name: scripts ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
+      - run: uv run --no-project -p 3.13 --with pytest --with pytest-xdist --with pytest-timeout pytest tests -q
+
+  actions:
+    # The job's name is the status label, which is how the report pairs them.
+    name: fixture ${{ matrix.os }} shard ${{ matrix.shard }}/2
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        shard: [1, 2]
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: The fixture becomes the project
+        shell: bash
+        run: cp -r fixture/. .
+      - id: select
+        uses: ./actions/select-tests
+        with:
+          config: selection.toml
+          scope: core
+      - uses: ./actions/setup-python-uv
+        with:
+          python: "3.13"
+      - uses: ./actions/build-smoke
+        with:
+          python: "3.13"
+          import: ci_fixture
+      - uses: ./actions/pytest-run
+        with:
+          label: fixture ${{ matrix.os }} shard ${{ matrix.shard }}/2
+          shard: ${{ matrix.shard }}/2
+          job-timeout-minutes: 10
+
+  report:
+    needs: [scripts, actions]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./actions/ci-report
+        with:
+          durations: "false"
+
+  actionlint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - name: actionlint
+        uses: docker://rhysd/actionlint:1.7.7
+        with:
+          args: -color

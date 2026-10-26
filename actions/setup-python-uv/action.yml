@@ -1,0 +1,77 @@
+name: Python and uv
+description: >-
+  uv, one Python, and the project's locked environment in .venv. The uv cache
+  is restored on GitHub-hosted runners; a self-hosted runner keeps its own
+  between jobs, which is faster than any download.
+
+inputs:
+  python:
+    description: >-
+      A version such as 3.13, or a weekly turn: `alternate` takes the versions
+      in `alternate` in turn by ISO week, `rotate` those in `rotate`. Every
+      weekly run so covers the whole range within two or three weeks without
+      paying for all of it every week.
+    required: true
+  alternate:
+    description: "The versions `python: alternate` takes turns between."
+    default: "3.12 3.14"
+  rotate:
+    description: "The versions `python: rotate` cycles through."
+    default: "3.12 3.13 3.14"
+  sync-args:
+    description: >-
+      Arguments to `uv sync`. `--locked` fails when uv.lock no longer matches
+      pyproject.toml, which is worth knowing on every push; a repository whose
+      lock names a sibling checkout by path uses `--frozen` instead, and one
+      with no lock file leaves both out.
+    default: --locked --all-groups
+  env:
+    description: Extra KEY=VALUE lines for every later step of the job.
+    default: ""
+
+outputs:
+  python:
+    description: The version installed.
+    value: ${{ steps.python.outputs.version }}
+
+runs:
+  using: composite
+  steps:
+    - name: Job environment
+      id: python
+      shell: bash
+      env:
+        EXTRA: ${{ inputs.env }}
+        WANT: ${{ inputs.python }}
+        ALTERNATE: ${{ inputs.alternate }}
+        ROTATE: ${{ inputs.rotate }}
+      run: |
+        # When the job started, so pytest-run can stop the tests in time to
+        # upload their reports before the job's own timeout.
+        # The first call in a job wins: a second sync (another Python) is not a new job.
+        [ -n "${CI_JOB_START:-}" ] || echo "CI_JOB_START=$(date +%s)" >> "$GITHUB_ENV"
+        if [ -n "$EXTRA" ]; then
+          printf '%s\n' "$EXTRA" | sed -e 's/^[[:space:]]*//' -e '/^$/d' >> "$GITHUB_ENV"
+        fi
+        week=$((10#$(date -u +%V)))
+        case "$WANT" in
+          alternate) set -- $ALTERNATE ;;
+          rotate) set -- $ROTATE ;;
+          *) set -- "$WANT"; week=0 ;;
+        esac
+        shift $(( week % $# ))
+        echo "version=$1" >> "$GITHUB_OUTPUT"
+        echo "Python $1 (ISO week $week)"
+
+    - uses: astral-sh/setup-uv@v6
+      with:
+        python-version: ${{ steps.python.outputs.version }}
+        enable-cache: ${{ runner.environment == 'github-hosted' }}
+        cache-suffix: ${{ runner.os }}-py${{ steps.python.outputs.version }}
+        cache-dependency-glob: |
+          **/uv.lock
+          **/pyproject.toml
+
+    - name: Sync
+      shell: bash
+      run: uv sync --python "${{ steps.python.outputs.version }}" ${{ inputs.sync-args }}

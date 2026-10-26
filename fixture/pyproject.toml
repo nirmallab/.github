@@ -1,0 +1,16 @@
+[project]
+name = "ci-fixture"
+version = "0.0.0"
+description = "A tiny package the shared actions are tested against."
+requires-python = ">=3.12"
+
+[dependency-groups]
+dev = ["pytest>=8.3", "pytest-xdist>=3.6", "pytest-timeout>=2.3"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["slow: over 30 seconds"]

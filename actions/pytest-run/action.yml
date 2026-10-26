@@ -1,0 +1,137 @@
+name: pytest with timeouts and a status
+description: >-
+  Run pytest under scripts/run_pytest.py: per-test, session and hard timeouts,
+  optional sharding by recorded duration, an isolated home for the test
+  process, and a status artifact the ci-report action reads. The step that
+  fails is "Result", after the reports are uploaded.
+
+inputs:
+  label:
+    description: >-
+      Unique within the run, and the end of the job's name (the report matches
+      them). Shards end in "shard K/N".
+    required: true
+  tests:
+    description: Test files or node ids, space-separated. Empty runs the configured testpaths.
+    default: ""
+  args:
+    description: Extra pytest arguments, as you would type them (quotes work).
+    default: ""
+  workers:
+    description: pytest-xdist workers; 0 runs in one process.
+    default: "2"
+  shard:
+    description: K/N to run shard K of N, or empty.
+    default: ""
+  durations-file:
+    description: Committed durations JSON, used when no ci-durations artifact is given.
+    default: ""
+  durations-run-id:
+    description: >-
+      Run whose ci-durations artifact balances the shards, or `latest` for the
+      newest one in this repository (needs actions: read and python3).
+    default: ""
+  test-timeout:
+    description: Seconds one test may take.
+    default: "600"
+  session-timeout-minutes:
+    description: Minutes after which pytest stops starting tests (0 for none).
+    default: "0"
+  job-timeout-minutes:
+    description: >-
+      The job's timeout-minutes. The test process is killed three minutes before
+      it, counted from when setup-python-uv ran, so the reports still upload.
+    default: "0"
+  allow-empty:
+    description: Treat "no tests collected" as success.
+    default: "false"
+
+outputs:
+  outcome:
+    description: success, test-failure, session-timeout, hard-timeout, no-tests or error.
+    value: ${{ steps.run.outputs.outcome }}
+
+runs:
+  using: composite
+  steps:
+    - name: Which durations
+      id: durations
+      if: inputs.durations-run-id != ''
+      shell: bash
+      env:
+        WANT: ${{ inputs.durations-run-id }}
+        GITHUB_TOKEN: ${{ github.token }}
+        SCRIPTS: ${{ github.action_path }}/../../scripts
+      run: |
+        id="$WANT"
+        if [ "$WANT" = latest ]; then
+          id=$(python3 "$SCRIPTS/find_durations.py" 2>/dev/null || true)
+        fi
+        echo "run-id=$id" >> "$GITHUB_OUTPUT"
+
+    - name: Durations from an earlier run
+      if: steps.durations.outputs.run-id != ''
+      continue-on-error: true
+      uses: actions/download-artifact@v4
+      with:
+        name: ci-durations
+        path: ${{ runner.temp }}/ci-durations
+        run-id: ${{ steps.durations.outputs.run-id }}
+        github-token: ${{ github.token }}
+
+    - name: Tests
+      id: run
+      shell: bash
+      env:
+        LABEL: ${{ inputs.label }}
+        TESTS: ${{ inputs.tests }}
+        ARGS: ${{ inputs.args }}
+        WORKERS: ${{ inputs.workers }}
+        SHARD: ${{ inputs.shard }}
+        DURATIONS: ${{ inputs.durations-file }}
+        TEST_TIMEOUT: ${{ inputs.test-timeout }}
+        SESSION: ${{ inputs.session-timeout-minutes }}
+        JOB: ${{ inputs.job-timeout-minutes }}
+        ALLOW_EMPTY: ${{ inputs.allow-empty }}
+        SCRIPTS: ${{ github.action_path }}/../../scripts
+      run: |
+        slug=$(printf '%s' "$LABEL" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9.' '-' | sed 's/-*$//')
+        out="$RUNNER_TEMP/ci-status/$slug"
+        [ -f "$RUNNER_TEMP/ci-durations/durations.json" ] && DURATIONS="$RUNNER_TEMP/ci-durations/durations.json"
+        hard=0
+        if [ "${JOB:-0}" -gt 0 ]; then
+          hard=$(( ${CI_JOB_START:-$(date +%s)} + JOB * 60 - 180 - $(date +%s) ))
+          [ "$hard" -lt 60 ] && hard=60
+        fi
+        # ARGS is written by the workflow, so its quoting is honoured; TESTS
+        # comes from file names and is only split on spaces, never evaluated.
+        eval "set -- $ARGS"
+        set -f
+        set +e
+        uv run --no-sync python "$SCRIPTS/run_pytest.py" \
+          --out "$out" --label "$LABEL" --workers "$WORKERS" --shard "$SHARD" \
+          --durations "$DURATIONS" --test-timeout "$TEST_TIMEOUT" \
+          --session-timeout $(( SESSION * 60 )) --hard-timeout "$hard" \
+          --seed "$GITHUB_RUN_ID" $([ "$ALLOW_EMPTY" = true ] && echo --allow-empty) \
+          -- "$@" $TESTS
+        rc=$?
+        # run_pytest.py has already written outcome= to $GITHUB_OUTPUT.
+        {
+          echo "rc=$rc"
+          echo "dir=$out"
+          echo "artifact=ci-status-$slug"
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Upload the status
+      if: always() && steps.run.outputs.dir != ''
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ steps.run.outputs.artifact }}
+        path: ${{ steps.run.outputs.dir }}
+        retention-days: 14
+        if-no-files-found: ignore
+
+    - name: Result
+      if: always()
+      shell: bash
+      run: exit ${{ steps.run.outputs.rc || 1 }}

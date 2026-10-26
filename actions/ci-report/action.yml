@@ -1,0 +1,50 @@
+name: Run report
+description: >-
+  The consolidated status of a multi-job run, in the job summary: every job's
+  class (success, test-failure, session-timeout, hard-timeout, setup-failure,
+  failure, cancelled, not-started, skipped), failing tests, shard balance and
+  completeness, estimated billed minutes. Merges the Linux durations into a
+  ci-durations artifact for the next run. Fails unless every job that is not
+  optional succeeded or was skipped. Run it in a job that `needs` all the
+  others with `if: always()` and `permissions: actions: read`.
+
+inputs:
+  optional:
+    description: Comma-separated fragments of job names whose failure does not fail the run.
+    default: ""
+  durations:
+    description: Upload merged durations as the ci-durations artifact (90 days).
+    default: "true"
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/download-artifact@v4
+      continue-on-error: true
+      with:
+        pattern: ci-status-*
+        path: ${{ runner.temp }}/ci-status
+
+    - id: report
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+        OPTIONAL: ${{ inputs.optional }}
+        SCRIPTS: ${{ github.action_path }}/../../scripts
+      run: |
+        set +e
+        python3 "$SCRIPTS/report.py" --artifacts "$RUNNER_TEMP/ci-status" \
+          --optional "$OPTIONAL" --durations-out "$RUNNER_TEMP/ci-durations"
+        echo "rc=$?" >> "$GITHUB_OUTPUT"
+
+    - if: inputs.durations == 'true'
+      uses: actions/upload-artifact@v4
+      with:
+        name: ci-durations
+        path: ${{ runner.temp }}/ci-durations/durations.json
+        retention-days: 90
+        if-no-files-found: ignore
+
+    - name: Verdict
+      shell: bash
+      run: exit ${{ steps.report.outputs.rc || 1 }}

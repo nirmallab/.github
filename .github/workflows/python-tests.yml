@@ -1,0 +1,114 @@
+name: python-tests
+
+# One pytest job, called from a repository's weekly.yml or monthly.yml:
+#
+#   linux:
+#     uses: nirmallab/.github/.github/workflows/python-tests.yml@v1
+#     with: { label: "linux py3.12 shard 1/3", python: "3.12", shard: "1/3", timeout-minutes: 20 }
+#
+# Why a reusable workflow and not just the composite actions: a caller job that
+# `uses:` a workflow cannot set its own timeout-minutes or env, but it can pass
+# them in, and every suite then gets checkout, uv, the isolated test process,
+# the three timeouts and the status artifact the same way. Repositories whose
+# Tier 1 is a single job use the composite actions directly instead.
+#
+# The caller needs `permissions: contents: read, actions: read` (the second to
+# fetch an earlier run's durations).
+
+on:
+  workflow_call:
+    inputs:
+      label:
+        description: Job name, unique in the run; shards end in "shard K/N".
+        type: string
+        required: true
+      runs-on:
+        description: JSON for runs-on, e.g. '"ubuntu-latest"' or '["self-hosted","macOS","ARM64"]'.
+        type: string
+        default: '"ubuntu-latest"'
+      python:
+        type: string
+        required: true
+      sync-args:
+        type: string
+        default: --locked --all-groups
+      env:
+        description: KEY=VALUE lines for the job.
+        type: string
+        default: ""
+      node-version:
+        description: Install Node.js too (some suites start node processes).
+        type: string
+        default: ""
+      setup:
+        description: Shell commands run after the sync, before the tests.
+        type: string
+        default: ""
+      tests:
+        type: string
+        default: ""
+      pytest-args:
+        type: string
+        default: ""
+      workers:
+        type: string
+        default: "2"
+      shard:
+        type: string
+        default: ""
+      durations-file:
+        type: string
+        default: ""
+      durations-run-id:
+        type: string
+        default: ""
+      test-timeout:
+        type: number
+        default: 600
+      session-timeout-minutes:
+        type: number
+        default: 0
+      timeout-minutes:
+        type: number
+        default: 30
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  pytest:
+    name: ${{ inputs.label }}
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - if: inputs.node-version != ''
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+
+      - uses: nirmallab/.github/actions/setup-python-uv@v1
+        with:
+          python: ${{ inputs.python }}
+          sync-args: ${{ inputs.sync-args }}
+          env: ${{ inputs.env }}
+
+      - name: Prepare
+        if: inputs.setup != ''
+        shell: bash
+        run: ${{ inputs.setup }}
+
+      - uses: nirmallab/.github/actions/pytest-run@v1
+        with:
+          label: ${{ inputs.label }}
+          tests: ${{ inputs.tests }}
+          args: ${{ inputs.pytest-args }}
+          workers: ${{ inputs.workers }}
+          shard: ${{ inputs.shard }}
+          durations-file: ${{ inputs.durations-file }}
+          durations-run-id: ${{ inputs.durations-run-id }}
+          test-timeout: ${{ inputs.test-timeout }}
+          session-timeout-minutes: ${{ inputs.session-timeout-minutes }}
+          job-timeout-minutes: ${{ inputs.timeout-minutes }}

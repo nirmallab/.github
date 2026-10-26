@@ -1,0 +1,3 @@
+package = "ci_fixture"
+essential = ["tests/test_part1.py"]
+core = ["tests/test_part2.py"]

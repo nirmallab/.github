@@ -1,0 +1,44 @@
+name: Build and install smoke
+description: >-
+  Build the project's wheel, install it into a fresh virtual environment with
+  nothing else from the checkout on the path, and run a few commands against
+  it. Catches what an editable install hides: a module left out of the wheel,
+  package data not shipped, an undeclared dependency.
+
+inputs:
+  python:
+    description: Python for the fresh environment.
+    required: true
+  import:
+    description: Module(s) to import, space-separated.
+    required: true
+  commands:
+    description: Shell lines run with the fresh environment's bin first on PATH, from an empty directory.
+    default: ""
+  extras:
+    description: Extras to install the wheel with, such as "[ai,bridge]".
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        IMPORTS: ${{ inputs.import }}
+        COMMANDS: ${{ inputs.commands }}
+      run: |
+        dist="$RUNNER_TEMP/smoke-dist"; venv="$RUNNER_TEMP/smoke-venv"; work="$RUNNER_TEMP/smoke-work"
+        rm -rf "$dist" "$venv" "$work"; mkdir -p "$work"
+        uv build --wheel --out-dir "$dist"
+        uv venv --python "${{ inputs.python }}" "$venv"
+        wheel=$(ls "$dist"/*.whl | head -1)
+        uv pip install --python "$venv" "${wheel}${{ inputs.extras }}"
+        if [ -d "$venv/Scripts" ]; then bin="$venv/Scripts"; else bin="$venv/bin"; fi
+        cd "$work"
+        for module in $IMPORTS; do
+          "$bin/python" -c "import $module, sys; print($module.__name__, getattr($module, '__version__', ''), 'from', $module.__file__)"
+        done
+        uv pip check --python "$venv"
+        if [ -n "$COMMANDS" ]; then
+          PATH="$bin:$PATH" bash -euo pipefail -c "$COMMANDS"
+        fi
